@@ -101,6 +101,10 @@ export class MongoService {
       await decisionsCollection.createIndex({ decision: 1 });
       await decisionsCollection.createIndex({ timestamp: -1, decision: 1 }); // Compound index
 
+      // Indexes for startup_balances collection
+      const startupBalancesCollection = this.db.collection("startup_balances");
+      await startupBalancesCollection.createIndex({ timestamp: -1 });
+
       logger.info("✅ MongoDB indexes created");
     } catch (error: any) {
       logger.error("Error creating indexes:", error.message);
@@ -145,6 +149,68 @@ export class MongoService {
       }
     } catch (error: any) {
       logger.error("Error saving hour decision to MongoDB:", error.message);
+    }
+  }
+
+  async saveStartupBalance(data: {
+    balances: { sol: number; usdt: number };
+    totalValue: number;
+    solPrice: number;
+  }): Promise<void> {
+    if (!this.db || !this.isConnected) return;
+
+    try {
+      const startupBalances = this.db.collection("startup_balances");
+
+      // Check if there's already a startup balance recorded (in case of server restart)
+      // We'll update it or insert new one
+      const existing = await startupBalances.findOne(
+        {},
+        { sort: { timestamp: -1 } }
+      );
+
+      await startupBalances.insertOne({
+        timestamp: new Date(),
+        balances: {
+          ...data.balances,
+          totalValue: data.totalValue,
+        },
+        solPrice: data.solPrice,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      logger.debug(
+        `💾 Startup balance saved: ${data.totalValue.toFixed(2)} USDT total`
+      );
+    } catch (error: any) {
+      logger.error("Error saving startup balance:", error.message);
+    }
+  }
+
+  async getStartupBalance(): Promise<{
+    balances: { sol: number; usdt: number; totalValue: number };
+    solPrice: number;
+    timestamp: Date;
+  } | null> {
+    if (!this.db || !this.isConnected) return null;
+
+    try {
+      const startupBalances = this.db.collection("startup_balances");
+      const latest = await startupBalances.findOne(
+        {},
+        { sort: { timestamp: 1 } } // Get the first/oldest startup balance
+      );
+      return latest
+        ? {
+            balances: latest.balances,
+            solPrice: latest.solPrice,
+            timestamp: latest.timestamp,
+          }
+        : null;
+    } catch (error: any) {
+      logger.error("Error getting startup balance:", error.message);
+      return null;
     }
   }
 

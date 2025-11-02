@@ -3,7 +3,7 @@ import { BinanceService } from "../services/binanceService.js";
 import { PredictionAlgorithm } from "../algorithms/predictionAlgorithm.js";
 import { TradingStrategy } from "../strategies/tradingStrategy.js";
 import { ProfitTracker } from "../utils/profitTracker.js";
-import { MongoService } from "../services/mongodbService.js";
+import { MongoService, HourDecision } from "../services/mongodbService.js";
 
 export class TradingBot {
   private binanceService: BinanceService;
@@ -28,6 +28,8 @@ export class TradingBot {
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     logger.info("🔄 Starting trading cycle...");
 
+    const cycleStartTime = Date.now();
+
     try {
       // Step 1: Fetch current market data
       logger.info("📊 Fetching market data for SOL/USDT...");
@@ -39,17 +41,50 @@ export class TradingBot {
 
       // Step 3: Execute trading strategy
       logger.info("💼 Executing trading strategy...");
-      await this.tradingStrategy.execute(prediction, marketData);
+      const strategyResult = await this.tradingStrategy.execute(
+        prediction,
+        marketData
+      );
 
       // Step 4: Show profit summary
       const solBalance = await this.binanceService.getBalance("SOL");
       const usdtBalance = await this.binanceService.getBalance("USDT");
+      const totalValue = solBalance * marketData.price + usdtBalance;
+
+      logger.info(
+        `💰 Current Balances: ${solBalance.toFixed(
+          4
+        )} SOL | ${usdtBalance.toFixed(2)} USDT | Total: $${totalValue.toFixed(
+          2
+        )}`
+      );
+
       this.profitTracker.logSummary(
         { sol: solBalance, usdt: usdtBalance },
         marketData.price
       );
 
-      // Step 5: Save bot snapshot to MongoDB
+      // Step 5: Save hour decision with full analytics to MongoDB
+      const executionTime = Date.now() - cycleStartTime;
+
+      const hourDecision: HourDecision = {
+        timestamp: new Date(),
+        decision: strategyResult.traded ? "TRADED" : "SKIPPED",
+        skipReasons: strategyResult.skipReasons,
+        tradeDetails: strategyResult.tradeDetails,
+        prediction: prediction,
+        marketData: marketData,
+        balances: {
+          sol: solBalance,
+          usdt: usdtBalance,
+          totalValue: totalValue,
+        },
+        executionTime: executionTime,
+      };
+
+      await this.mongoService.saveHourDecision(hourDecision);
+
+      // Step 6: Save bot snapshot to MongoDB
       await this.mongoService.saveBotSnapshot({
         marketData,
         balances: { sol: solBalance, usdt: usdtBalance },
@@ -59,7 +94,51 @@ export class TradingBot {
 
       logger.info("✅ Trading cycle completed successfully");
       logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    } catch (error) {
+    } catch (error: any) {
+      const executionTime = Date.now() - cycleStartTime;
+
+      // Try to save error details to MongoDB
+      try {
+        const solBalance = await this.binanceService.getBalance("SOL");
+        const usdtBalance = await this.binanceService.getBalance("USDT");
+        const totalValue =
+          solBalance *
+            (await this.binanceService.getMarketData("SOLUSDT")).price +
+          usdtBalance;
+
+        const errorDecision: HourDecision = {
+          timestamp: new Date(),
+          decision: "SKIPPED",
+          skipReasons: [
+            {
+              reason: "EXECUTION_ERROR",
+              details: {
+                errorMessage: error.message,
+                errorStack: error.stack,
+              },
+              timestamp: new Date(),
+            },
+          ],
+          prediction: {} as any,
+          marketData: {} as any,
+          balances: {
+            sol: solBalance,
+            usdt: usdtBalance,
+            totalValue: totalValue,
+          },
+          executionTime: executionTime,
+          errorDetails: {
+            message: error.message,
+            stack: error.stack,
+            timestamp: new Date(),
+          },
+        };
+
+        await this.mongoService.saveHourDecision(errorDecision);
+      } catch (innerError) {
+        // Ignore errors when saving error details
+      }
+
       logger.error("❌ Error in trading cycle:", error);
       throw error;
     }

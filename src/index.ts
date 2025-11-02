@@ -24,7 +24,12 @@ logger.info(`⏰ Scheduled to run every hour (cron: ${cronSchedule})`);
 // Run immediately on startup for testing, then schedule hourly
 logger.info("Running initial check...");
 tradingBot.execute().catch((error) => {
-  logger.error("Initial execution error:", error);
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorStack = error instanceof Error ? error.stack : undefined;
+  logger.error("Initial execution error:", errorMessage);
+  if (errorStack) {
+    logger.error("Stack trace:", errorStack);
+  }
 });
 
 // Schedule the bot to run every hour
@@ -33,7 +38,12 @@ cron.schedule(cronSchedule, async () => {
   try {
     await tradingBot.execute();
   } catch (error) {
-    logger.error("Cron job execution error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    logger.error("Cron job execution error:", errorMessage);
+    if (errorStack) {
+      logger.error("Stack trace:", errorStack);
+    }
   }
 });
 

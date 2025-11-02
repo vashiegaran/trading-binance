@@ -90,7 +90,18 @@ export class BinanceService {
 
       return marketData;
     } catch (error: any) {
-      logger.error(`Error fetching market data for ${symbol}:`, error.message);
+      // Extract safe error information
+      const errorInfo = {
+        message: error?.message || "Unknown error",
+        code: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+      };
+      logger.error(
+        `Error fetching market data for ${symbol}:`,
+        JSON.stringify(errorInfo, null, 2)
+      );
       throw error;
     }
   }
@@ -105,7 +116,18 @@ export class BinanceService {
       const balance = account.balances.find((b: any) => b.asset === asset);
       return balance ? parseFloat(balance.free) : 0;
     } catch (error: any) {
-      logger.error(`Error fetching balance for ${asset}:`, error.message);
+      // Extract safe error information
+      const errorInfo = {
+        message: error?.message || "Unknown error",
+        code: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+      };
+      logger.error(
+        `Error fetching balance for ${asset}:`,
+        JSON.stringify(errorInfo, null, 2)
+      );
       throw error;
     }
   }
@@ -123,7 +145,17 @@ export class BinanceService {
       logger.info(`✅ Buy order placed: ${JSON.stringify(order)}`);
       return order;
     } catch (error: any) {
-      logger.error(`Error placing buy order:`, error.message);
+      const errorInfo = {
+        message: error?.message || "Unknown error",
+        code: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+      };
+      logger.error(
+        `Error placing buy order:`,
+        JSON.stringify(errorInfo, null, 2)
+      );
       throw error;
     }
   }
@@ -141,7 +173,17 @@ export class BinanceService {
       logger.info(`✅ Sell order placed: ${JSON.stringify(order)}`);
       return order;
     } catch (error: any) {
-      logger.error(`Error placing sell order:`, error.message);
+      const errorInfo = {
+        message: error?.message || "Unknown error",
+        code: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+      };
+      logger.error(
+        `Error placing sell order:`,
+        JSON.stringify(errorInfo, null, 2)
+      );
       throw error;
     }
   }
@@ -167,7 +209,17 @@ export class BinanceService {
       logger.info(`✅ Limit buy order placed: ${JSON.stringify(order)}`);
       return order;
     } catch (error: any) {
-      logger.error(`Error placing limit buy order:`, error.message);
+      const errorInfo = {
+        message: error?.message || "Unknown error",
+        code: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+      };
+      logger.error(
+        `Error placing limit buy order:`,
+        JSON.stringify(errorInfo, null, 2)
+      );
       throw error;
     }
   }
@@ -193,7 +245,17 @@ export class BinanceService {
       logger.info(`✅ Limit sell order placed: ${JSON.stringify(order)}`);
       return order;
     } catch (error: any) {
-      logger.error(`Error placing limit sell order:`, error.message);
+      const errorInfo = {
+        message: error?.message || "Unknown error",
+        code: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+      };
+      logger.error(
+        `Error placing limit sell order:`,
+        JSON.stringify(errorInfo, null, 2)
+      );
       throw error;
     }
   }

@@ -24,6 +24,8 @@
     "@binance/connector": "^3.6.1",
     "axios": "^1.7.9",
     "dotenv": "^16.4.7",
+    "flu": "^0.1.1",
+    "fly": "^4.6.16",
     "mongodb": "^6.20.0",
     "node-cron": "^3.0.3",
     "winston": "^3.17.0"

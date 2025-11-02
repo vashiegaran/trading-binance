@@ -69,6 +69,51 @@ npm run build
 npm start
 ```
 
+## Deployment
+
+### Fly.io Deployment
+
+Deploy the bot to Fly.io for 24/7 operation:
+
+1. **Install Fly CLI:**
+   ```bash
+   brew install flyctl
+   # OR
+   curl -L https://fly.io/install.sh | sh
+   ```
+
+2. **Login to Fly.io:**
+   ```bash
+   fly auth login
+   ```
+
+3. **Initialize and Deploy:**
+   ```bash
+   fly launch
+   # Follow prompts, choose region
+   ```
+
+4. **Set Environment Variables:**
+   ```bash
+   fly secrets set BINANCE_API_KEY=your_key
+   fly secrets set BINANCE_API_SECRET=your_secret
+   fly secrets set MONGODB_URI=your_mongodb_uri
+   fly secrets set TRADE_AMOUNT_USDT=10
+   fly secrets set MIN_CONFIDENCE=60
+   ```
+
+5. **Deploy:**
+   ```bash
+   fly deploy
+   ```
+
+6. **View Logs:**
+   ```bash
+   fly logs
+   ```
+
+For complete deployment guide, see **`FLYIO_DEPLOYMENT.md`**
+
 ## How It Works
 
 1. **Hourly Execution**: Bot runs every hour at minute 0

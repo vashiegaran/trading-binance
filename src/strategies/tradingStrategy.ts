@@ -109,6 +109,18 @@ export class TradingStrategy {
       return result;
     }
 
+    // Edge case: signal is not BUY, SELL, or HOLD (shouldn't happen normally)
+    if (skipReasons.length === 0) {
+      skipReasons.push({
+        reason: "UNKNOWN_SIGNAL",
+        details: {
+          signal: prediction.signal,
+          explanation: "Signal type is not recognized",
+        },
+        timestamp: new Date(),
+      });
+    }
+
     return { traded: false, skipReasons };
   }
 

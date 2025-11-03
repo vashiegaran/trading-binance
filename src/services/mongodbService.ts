@@ -39,6 +39,23 @@ export interface HourDecision {
     stack?: string;
     timestamp: Date;
   };
+  // Detailed Analytics
+  analytics?: {
+    previousBalances?: { sol: number; usdt: number; totalValue: number };
+    previousPrice?: number;
+    previousTimestamp?: Date;
+    valueChange?: {
+      sol: { amount: number; percent: number };
+      usdt: { amount: number; percent: number };
+      total: { amount: number; percent: number };
+    };
+    priceChange?: {
+      amount: number;
+      percent: number;
+    };
+    detailedSkipAnalysis?: string; // Full explanation of why skipped
+    decisionExplanation?: string; // Why BUY/SELL/HOLD was chosen
+  };
 }
 
 export class MongoService {
@@ -129,7 +146,24 @@ export class MongoService {
   }
 
   async saveHourDecision(decision: HourDecision): Promise<void> {
-    if (!this.db || !this.isConnected) return;
+    // Ensure MongoDB is connected before saving
+    if (!this.isConnected) {
+      try {
+        await this.connect();
+      } catch (error: any) {
+        logger.warn(
+          `⚠️  MongoDB not connected, cannot save hour decision (${decision.decision}). Error: ${error.message}`
+        );
+        return;
+      }
+    }
+
+    if (!this.db || !this.isConnected) {
+      logger.warn(
+        `⚠️  MongoDB not available, cannot save hour decision (${decision.decision})`
+      );
+      return;
+    }
 
     try {
       const decisions = this.db.collection("hour_decisions");
@@ -140,15 +174,18 @@ export class MongoService {
       });
 
       if (decision.decision === "TRADED") {
-        logger.debug(`✅ Hour decision logged: TRADED with full analytics`);
+        logger.info(`✅ Hour decision saved: TRADED with full analytics`);
       } else {
         const reasonsCount = decision.skipReasons?.length || 0;
-        logger.debug(
-          `⏸️  Hour decision logged: SKIPPED with ${reasonsCount} reason(s)`
+        logger.info(
+          `⏸️  Hour decision saved: SKIPPED with ${reasonsCount} reason(s)`
         );
       }
     } catch (error: any) {
-      logger.error("Error saving hour decision to MongoDB:", error.message);
+      logger.error(
+        `❌ Error saving hour decision to MongoDB (${decision.decision}): ${error.message}`
+      );
+      logger.error(error.stack);
     }
   }
 
@@ -346,6 +383,157 @@ export class MongoService {
       logger.debug("✅ Hourly metrics aggregated");
     } catch (error: any) {
       logger.error("Error aggregating hourly metrics:", error.message);
+    }
+  }
+
+  /**
+   * Get decision statistics (traded vs skipped)
+   */
+  async getDecisionStatistics(
+    startDate?: Date,
+    endDate?: Date
+  ): Promise<{
+    total: number;
+    traded: number;
+    skipped: number;
+    tradedPercent: number;
+    skippedPercent: number;
+  }> {
+    if (!this.db || !this.isConnected) {
+      return {
+        total: 0,
+        traded: 0,
+        skipped: 0,
+        tradedPercent: 0,
+        skippedPercent: 0,
+      };
+    }
+
+    try {
+      const decisionsCollection = this.db.collection("hour_decisions");
+      const matchFilter: any = {};
+
+      if (startDate || endDate) {
+        matchFilter.timestamp = {};
+        if (startDate) matchFilter.timestamp.$gte = startDate;
+        if (endDate) matchFilter.timestamp.$lte = endDate;
+      }
+
+      const [total, traded, skipped] = await Promise.all([
+        decisionsCollection.countDocuments(matchFilter),
+        decisionsCollection.countDocuments({ ...matchFilter, decision: "TRADED" }),
+        decisionsCollection.countDocuments({ ...matchFilter, decision: "SKIPPED" }),
+      ]);
+
+      const tradedPercent = total > 0 ? (traded / total) * 100 : 0;
+      const skippedPercent = total > 0 ? (skipped / total) * 100 : 0;
+
+      return {
+        total,
+        traded,
+        skipped,
+        tradedPercent,
+        skippedPercent,
+      };
+    } catch (error: any) {
+      logger.error("Error getting decision statistics:", error.message);
+      return {
+        total: 0,
+        traded: 0,
+        skipped: 0,
+        tradedPercent: 0,
+        skippedPercent: 0,
+      };
+    }
+  }
+
+  /**
+   * Get skip reasons statistics
+   */
+  async getSkipReasonsStatistics(
+    startDate?: Date,
+    endDate?: Date
+  ): Promise<Array<{ reason: string; count: number; latest: Date }>> {
+    if (!this.db || !this.isConnected) return [];
+
+    try {
+      const decisionsCollection = this.db.collection("hour_decisions");
+      const matchFilter: any = { decision: "SKIPPED" };
+
+      if (startDate || endDate) {
+        matchFilter.timestamp = {};
+        if (startDate) matchFilter.timestamp.$gte = startDate;
+        if (endDate) matchFilter.timestamp.$lte = endDate;
+      }
+
+      const skipReasons = await decisionsCollection
+        .aggregate([
+          { $match: matchFilter },
+          { $unwind: "$skipReasons" },
+          {
+            $group: {
+              _id: "$skipReasons.reason",
+              count: { $sum: 1 },
+              latest: { $max: "$timestamp" },
+            },
+          },
+          { $sort: { count: -1 } },
+        ])
+        .toArray();
+
+      return skipReasons.map((sr: any) => ({
+        reason: sr._id,
+        count: sr.count,
+        latest: sr.latest,
+      }));
+    } catch (error: any) {
+      logger.error("Error getting skip reasons statistics:", error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get all hour decisions (for analytics)
+   */
+  async getHourDecisions(
+    startDate?: Date,
+    endDate?: Date,
+    decision?: "TRADED" | "SKIPPED",
+    limit: number = 1000
+  ): Promise<HourDecision[]> {
+    if (!this.db || !this.isConnected) return [];
+
+    try {
+      const decisionsCollection = this.db.collection("hour_decisions");
+      const matchFilter: any = {};
+
+      if (startDate || endDate) {
+        matchFilter.timestamp = {};
+        if (startDate) matchFilter.timestamp.$gte = startDate;
+        if (endDate) matchFilter.timestamp.$lte = endDate;
+      }
+
+      if (decision) {
+        matchFilter.decision = decision;
+      }
+
+      const decisions = await decisionsCollection
+        .find(matchFilter)
+        .sort({ timestamp: -1 })
+        .limit(limit)
+        .toArray();
+
+      return decisions.map((d: any) => ({
+        ...d,
+        timestamp: d.timestamp instanceof Date ? d.timestamp : new Date(d.timestamp),
+        skipReasons: d.skipReasons?.map((sr: any) => ({
+          ...sr,
+          timestamp: sr.timestamp instanceof Date ? sr.timestamp : new Date(sr.timestamp),
+        })),
+      })) as HourDecision[];
+    } catch (error: any) {
+      logger.error("Error getting hour decisions:", error.message);
+      return [];
     }
   }
 

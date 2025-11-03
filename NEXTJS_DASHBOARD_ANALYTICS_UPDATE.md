@@ -159,6 +159,35 @@ No changes needed! Your existing structure is fine.
 
 ---
 
+## New Collection: `startup_balances` (NEW)
+
+This collection tracks the initial portfolio balance when the server starts. **Critical for calculating total profit/loss from startup.**
+
+**Document Structure:**
+
+```typescript
+{
+  timestamp: Date,                 // When server started
+  balances: {
+    sol: number,
+    usdt: number,
+    totalValue: number             // Total portfolio value at startup
+  },
+  solPrice: number,                // SOL price at startup
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+**Usage:**
+
+- Get the **initial portfolio value** to calculate performance from startup
+- Calculate **total profit/loss**: `currentTotalValue - startupTotalValue`
+- Calculate **percentage gain/loss**: `((currentTotalValue - startupTotalValue) / startupTotalValue) * 100`
+- Track **performance since server restart**
+
+---
+
 ## Skip Reason Types
 
 You need to handle these skip reason codes in your dashboard:
@@ -204,11 +233,13 @@ Add these columns to your existing trades table:
 
 ### 3. Portfolio Value Tracking
 
-Add a new card/chart for **total USDT value**:
+Add a new card/chart for **total USDT value**:a
 
 - Display `balances.totalValue` from latest `bot_snapshots`
 - Show historical portfolio value chart
 - Compare against trades to show unrealized gains/losses
+- **NEW:** Show profit/loss from startup using `startup_balances` collection
+- **NEW:** Display percentage gain/loss since server start
 
 ### 4. Skip Reasons Analytics
 
@@ -276,6 +307,40 @@ GET /api/portfolio-value?startDate=...&endDate=...
 
 Returns: Array of portfolio snapshots with `totalValue`
 
+### 4. `/api/startup-balance` (NEW)
+
+**Purpose:** Get the initial portfolio balance when server started
+
+**Instructions:**
+
+- Query the `startup_balances` collection
+- Get the first/oldest record (sort by `timestamp: 1`) for the original startup balance
+- Return the startup balance document with timestamp, balances (sol, usdt, totalValue), and solPrice
+- Return `null` if no startup balance exists
+
+**Response format:**
+
+- Should include: `timestamp`, `balances.sol`, `balances.usdt`, `balances.totalValue`, `solPrice`
+
+### 5. `/api/performance-from-startup` (NEW)
+
+**Purpose:** Calculate performance metrics from startup
+
+**Instructions:**
+
+1. Get the startup balance from `startup_balances` collection (first record sorted by timestamp ascending)
+2. Get the current balance from `bot_snapshots` collection (latest record sorted by timestamp descending)
+3. Calculate:
+   - **Absolute change**: `currentTotalValue - startupTotalValue`
+   - **Percentage change**: `((currentTotalValue - startupTotalValue) / startupTotalValue) * 100`
+   - **Duration**: Time difference in milliseconds between current and startup timestamps
+4. Return both startup and current balances, plus the calculated profit/loss metrics
+5. Return `null` if either startup or current balance is missing
+
+**Response format:**
+
+- Should include: `startupBalance` (with timestamp and all balance fields), `currentBalance` (with timestamp and all balance fields), `profitLoss` (with absolute, percentage, and duration)
+
 ---
 
 ## Component Structure Suggestions
@@ -309,8 +374,22 @@ Returns: Array of portfolio snapshots with `totalValue`
    - Overlay actual trades on the chart
 
 6. **`ExecutionPerformanceChart.tsx`**
+
    - Bar chart showing execution times
    - Trend line over time
+
+7. **`StartupPerformanceCard.tsx`** (NEW)
+
+   - Shows total profit/loss from startup
+   - Displays percentage gain/loss
+   - Shows time since server start
+   - Compares current vs startup balance
+
+8. **`PortfolioPerformanceChart.tsx`** (NEW)
+   - Line chart showing portfolio value over time
+   - Highlight startup balance point
+   - Show profit/loss zones (green/red)
+   - Display annotations for major gains/losses
 
 ---
 
@@ -365,6 +444,50 @@ const portfolioHistory = await db
   .toArray();
 ```
 
+### Get startup balance (first record)
+
+```typescript
+const startupBalance = await db
+  .collection("startup_balances")
+  .findOne({}, { sort: { timestamp: 1 } }); // Get oldest/first startup
+
+// Or get the latest startup (in case of server restarts)
+const latestStartup = await db
+  .collection("startup_balances")
+  .findOne({}, { sort: { timestamp: -1 } }); // Get newest startup
+```
+
+### Calculate performance from startup
+
+```typescript
+// Get startup balance
+const startup = await db
+  .collection("startup_balances")
+  .findOne({}, { sort: { timestamp: 1 } });
+
+// Get current balance from latest snapshot
+const current = await db
+  .collection("bot_snapshots")
+  .findOne({}, { sort: { timestamp: -1 } });
+
+if (startup && current) {
+  const absoluteChange =
+    current.balances.totalValue - startup.balances.totalValue;
+  const percentageChange = (absoluteChange / startup.balances.totalValue) * 100;
+  const duration = current.timestamp.getTime() - startup.timestamp.getTime();
+
+  return {
+    startupBalance: startup,
+    currentBalance: current,
+    profitLoss: {
+      absolute: absoluteChange,
+      percentage: percentageChange,
+      duration: duration, // milliseconds
+    },
+  };
+}
+```
+
 ---
 
 ## Key Takeaways
@@ -374,6 +497,13 @@ const portfolioHistory = await db
 - `balances.totalValue` - Total portfolio value in USDT
 - All skip reason fields from `hour_decisions.skipReasons[]`
 - All trade detail fields from `hour_decisions.tradeDetails`
+
+### New Collection to Use:
+
+- `startup_balances` - Tracks initial portfolio value when server starts
+  - Use to calculate profit/loss from startup
+  - Use to show performance percentage since server restart
+  - Query with `sort: { timestamp: 1 }` to get first startup
 
 ### Important:
 
@@ -385,10 +515,11 @@ const portfolioHistory = await db
 ### Priority Features:
 
 1. ✅ Display total USDT value (most important)
-2. ✅ Show skip reasons breakdown
-3. ✅ Enhanced decision timeline
-4. ✅ Portfolio value chart
-5. ⚪ Execution performance tracking
+2. ✅ Show profit/loss from startup (NEW - use `startup_balances`)
+3. ✅ Show skip reasons breakdown
+4. ✅ Enhanced decision timeline
+5. ✅ Portfolio value chart with startup point
+6. ⚪ Execution performance tracking
 
 ---
 
@@ -402,6 +533,10 @@ const portfolioHistory = await db
 - [ ] Filtering by decision type works
 - [ ] Filtering by skip reason works
 - [ ] Expandable decision rows work
+- [ ] **NEW:** Can fetch startup balance from `startup_balances` collection
+- [ ] **NEW:** Profit/loss from startup calculates correctly
+- [ ] **NEW:** Performance percentage displays correctly
+- [ ] **NEW:** Startup balance point shows on portfolio chart
 
 ---
 

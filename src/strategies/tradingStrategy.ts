@@ -176,10 +176,12 @@ export class TradingStrategy {
       let orderResult: any = null;
 
       // Option 1: Market Buy (immediate execution)
+      // Use quoteOrderQty (USDT amount) for MARKET BUY orders (Binance requirement)
       if (process.env.USE_MARKET_ORDERS === "true") {
         orderResult = await this.binanceService.buyMarket(
           this.TRADING_PAIR,
-          quantity
+          quantity,
+          tradeAmount // Pass USDT amount as quoteOrderQty for MARKET BUY
         );
       }
       // Option 2: Limit Buy (set below current price)
@@ -232,18 +234,29 @@ export class TradingStrategy {
 
       return { traded: true, tradeDetails };
     } catch (error: any) {
+      const errorDetails = {
+        errorMessage: error?.message || "Unknown error",
+        errorCode: error?.code,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+        attemptedQuantity: quantity,
+        attemptedAmount: tradeAmount,
+      };
+
       const reason: SkipReason = {
         reason: "BUY_EXECUTION_ERROR",
-        details: {
-          errorMessage: error.message,
-          errorCode: error.code,
-          attemptedQuantity: quantity,
-          attemptedAmount: tradeAmount,
-        },
+        details: errorDetails,
         timestamp: new Date(),
       };
       skipReasons.push(reason);
-      logger.error(`❌ Buy execution failed:`, error.message);
+
+      logger.error(
+        `❌ Buy execution failed:`,
+        JSON.stringify(errorDetails, null, 2)
+      );
+      logger.error(`Error details: ${error?.message || "Unknown error"}`);
+
       return { traded: false, skipReasons };
     }
   }

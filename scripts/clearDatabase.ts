@@ -54,4 +54,3 @@ clearDatabase().catch((error) => {
   logger.error(`Fatal error: ${error.message}`);
   process.exit(1);
 });
-

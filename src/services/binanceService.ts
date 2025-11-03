@@ -134,13 +134,35 @@ export class BinanceService {
 
   /**
    * Place a market buy order
+   * For MARKET BUY orders, Binance requires quoteOrderQty (USDT amount) instead of quantity
    */
-  async buyMarket(symbol: string, quantity: number): Promise<any> {
+  async buyMarket(
+    symbol: string,
+    quantity: number,
+    quoteOrderQty?: number
+  ): Promise<any> {
     try {
-      logger.info(`🟢 Placing MARKET BUY order: ${quantity} ${symbol}`);
-      const response = await this.client.newOrder(symbol, "BUY", "MARKET", {
-        quantity: quantity.toString(),
-      });
+      const orderParams: any = {};
+
+      // Use quoteOrderQty for MARKET BUY if provided (recommended by Binance)
+      if (quoteOrderQty !== undefined) {
+        logger.info(
+          `🟢 Placing MARKET BUY order: ${quoteOrderQty.toFixed(
+            2
+          )} USDT (quoteOrderQty)`
+        );
+        orderParams.quoteOrderQty = quoteOrderQty.toFixed(2);
+      } else {
+        logger.info(`🟢 Placing MARKET BUY order: ${quantity} ${symbol}`);
+        orderParams.quantity = quantity.toString();
+      }
+
+      const response = await this.client.newOrder(
+        symbol,
+        "BUY",
+        "MARKET",
+        orderParams
+      );
       const order = response.data;
       logger.info(`✅ Buy order placed: ${JSON.stringify(order)}`);
       return order;

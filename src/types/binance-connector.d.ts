@@ -12,6 +12,7 @@ declare module '@binance/connector' {
       type: 'MARKET' | 'LIMIT',
       params?: {
         quantity?: string | number;
+        quoteOrderQty?: string | number; // For MARKET BUY orders (USDT amount)
         price?: string | number;
         timeInForce?: string;
       }

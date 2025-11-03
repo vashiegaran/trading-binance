@@ -1,4 +1,4 @@
-import { MongoClient, Db, Collection } from "mongodb";
+import { MongoClient, Db, Collection, ObjectId } from "mongodb";
 import { logger } from "../utils/logger.js";
 import { TradeRecord } from "../utils/profitTracker.js";
 import { Prediction } from "../algorithms/predictionAlgorithm.js";
@@ -303,7 +303,9 @@ export class MongoService {
 
       await snapshots.insertOne(snapshotData);
       logger.debug(
-        `💾 Bot snapshot saved with decision: ${data.hourDecision?.decision || "N/A"}`
+        `💾 Bot snapshot saved with decision: ${
+          data.hourDecision?.decision || "N/A"
+        }`
       );
     } catch (error: any) {
       logger.error("Error saving bot snapshot:", error.message);
@@ -317,6 +319,7 @@ export class MongoService {
       const db = this.db;
       const tradesCollection = db.collection("trades");
       const snapshotsCollection = db.collection("bot_snapshots");
+      const decisionsCollection = db.collection("hour_decisions");
       const metricsCollection = db.collection("hourly_metrics");
 
       // Get all hours from the last 24 hours that need aggregation
@@ -352,11 +355,34 @@ export class MongoService {
         ])
         .toArray();
 
-      // Process each hour
-      for (const hourData of hourlyTrades) {
-        const hour = new Date(hourData._id);
-        const trades = hourData.trades;
+      // Get all snapshots from the last 24 hours (even if no trades)
+      const allSnapshots = await snapshotsCollection
+        .find({
+          timestamp: { $gte: yesterday },
+        })
+        .sort({ timestamp: 1 })
+        .toArray();
 
+      // Create a map of hours with trades
+      const tradesByHour = new Map<string, any>();
+      for (const hourData of hourlyTrades) {
+        tradesByHour.set(hourData._id, hourData);
+      }
+
+      // Process all snapshots to create metrics for every hour
+      for (const snapshot of allSnapshots) {
+        const snapshotHour = new Date(snapshot.timestamp);
+        snapshotHour.setMinutes(0, 0, 0); // Round down to the hour
+        const hourKey = snapshotHour.toISOString().slice(0, 13) + ":00:00";
+        const hour = snapshotHour;
+
+        // Get trades for this hour (if any)
+        const hourData = tradesByHour.get(hourKey);
+        const trades = hourData?.trades || [];
+        const buyCount = hourData?.buyCount || 0;
+        const sellCount = hourData?.sellCount || 0;
+
+        // Calculate trade amounts and profit
         const buyAmount = trades
           .filter((t: any) => t.type === "BUY")
           .reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
@@ -365,54 +391,96 @@ export class MongoService {
           .reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
         const profit = sellAmount - buyAmount;
         const profitPercent = buyAmount > 0 ? (profit / buyAmount) * 100 : 0;
+        const totalVolume = hourData?.totalVolume || 0;
 
-        // Get snapshot for this hour
-        const snapshot = await snapshotsCollection.findOne({
-          timestamp: {
-            $gte: new Date(hour.getTime()),
-            $lt: new Date(hour.getTime() + 60 * 60 * 1000),
-          },
-        });
+        // Get the hour decision for this snapshot
+        let decision = null;
+        if (snapshot.hourDecisionId) {
+          try {
+            // Try to convert string ID to ObjectId and find decision
+            const decisionId =
+              typeof snapshot.hourDecisionId === "string"
+                ? new ObjectId(snapshot.hourDecisionId)
+                : snapshot.hourDecisionId;
+            decision = await decisionsCollection.findOne({
+              _id: decisionId,
+            });
+          } catch (err) {
+            // If hourDecisionId is not valid ObjectId, try finding by timestamp
+            decision = await decisionsCollection.findOne({
+              timestamp: {
+                $gte: new Date(hour.getTime()),
+                $lt: new Date(hour.getTime() + 60 * 60 * 1000),
+              },
+            });
+          }
+        }
 
         // Calculate cumulative profit up to this hour
         const previousMetrics = await metricsCollection.findOne(
-          {},
+          {
+            hour: { $lt: hour },
+          },
           { sort: { hour: -1 } }
         );
         const cumulative = (previousMetrics?.profit?.cumulative || 0) + profit;
 
-        // Upsert hourly metric
+        // Calculate total trade value for this hour
+        const totalTradeValue = buyAmount + sellAmount;
+
+        // Upsert hourly metric with decision information
         await metricsCollection.updateOne(
           { hour },
           {
             $set: {
               hour,
+              snapshotId: snapshot._id,
+              decision: decision
+                ? {
+                    decision: decision.decision,
+                    timestamp: decision.timestamp,
+                    hasTrade: decision.decision === "TRADED",
+                  }
+                : snapshot.hourDecision
+                ? {
+                    decision: snapshot.hourDecision.decision,
+                    timestamp: snapshot.timestamp,
+                    hasTrade: snapshot.hourDecision.decision === "TRADED",
+                  }
+                : null,
               trades: {
                 count: trades.length,
-                buyCount: hourData.buyCount,
-                sellCount: hourData.sellCount,
-                volume: hourData.totalVolume,
+                buyCount,
+                sellCount,
+                volume: totalVolume,
+                totalTradeValue, // Total value of all trades
+                buyAmount, // Total amount spent on buys
+                sellAmount, // Total amount received from sells
               },
               profit: {
                 amount: profit,
                 percent: profitPercent,
                 cumulative,
               },
-              balances: snapshot?.balances || {
+              balances: snapshot.balances || {
                 sol: 0,
                 usdt: 0,
                 totalValue: 0,
               },
-              marketPrice: snapshot?.marketData?.price || 0,
+              marketPrice: snapshot.marketData?.price || 0,
+              updatedAt: new Date(),
             },
           },
           { upsert: true }
         );
       }
 
-      logger.debug("✅ Hourly metrics aggregated");
+      logger.debug(
+        `✅ Hourly metrics aggregated for ${allSnapshots.length} snapshot(s)`
+      );
     } catch (error: any) {
       logger.error("Error aggregating hourly metrics:", error.message);
+      logger.error(error.stack);
     }
   }
 

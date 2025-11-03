@@ -172,18 +172,30 @@ export class TradingBot {
         analytics: analytics,
       };
 
-      await this.mongoService.saveHourDecision(hourDecision);
+      // Step 7: Save hour decision with full analytics to MongoDB
+      const hourDecisionId = await this.mongoService.saveHourDecision(
+        hourDecision
+      );
 
       // Step 8: Log detailed analytics
       this.logDetailedAnalytics(hourDecision);
 
-      // Step 9: Save bot snapshot to MongoDB
+      // Step 9: Save bot snapshot to MongoDB with hour_decision reference
       await this.mongoService.saveBotSnapshot({
         marketData,
         balances: { sol: solBalance, usdt: usdtBalance },
         prediction,
         botStatus: "running",
+        hourDecisionId: hourDecisionId || undefined,
+        hourDecision: {
+          decision: hourDecision.decision,
+          skipReasons: hourDecision.skipReasons,
+          tradeDetails: hourDecision.tradeDetails,
+        },
       });
+
+      // Step 10: Aggregate hourly metrics
+      await this.mongoService.aggregateHourlyMetrics();
 
       logger.info("✅ Trading cycle completed successfully");
       logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -228,6 +240,10 @@ export class TradingBot {
         };
 
         await this.mongoService.saveHourDecision(errorDecision);
+        // Also aggregate metrics even if there was an error
+        await this.mongoService.aggregateHourlyMetrics().catch(() => {
+          // Ignore errors when aggregating metrics
+        });
       } catch (innerError) {
         // Ignore errors when saving error details
       }

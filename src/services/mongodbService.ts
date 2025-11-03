@@ -145,7 +145,7 @@ export class MongoService {
     }
   }
 
-  async saveHourDecision(decision: HourDecision): Promise<void> {
+  async saveHourDecision(decision: HourDecision): Promise<string | null> {
     // Ensure MongoDB is connected before saving
     if (!this.isConnected) {
       try {
@@ -154,7 +154,7 @@ export class MongoService {
         logger.warn(
           `⚠️  MongoDB not connected, cannot save hour decision (${decision.decision}). Error: ${error.message}`
         );
-        return;
+        return null;
       }
     }
 
@@ -162,12 +162,12 @@ export class MongoService {
       logger.warn(
         `⚠️  MongoDB not available, cannot save hour decision (${decision.decision})`
       );
-      return;
+      return null;
     }
 
     try {
       const decisions = this.db.collection("hour_decisions");
-      await decisions.insertOne({
+      const result = await decisions.insertOne({
         ...decision,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -181,11 +181,15 @@ export class MongoService {
           `⏸️  Hour decision saved: SKIPPED with ${reasonsCount} reason(s)`
         );
       }
+
+      // Return the inserted document ID
+      return result.insertedId.toString();
     } catch (error: any) {
       logger.error(
         `❌ Error saving hour decision to MongoDB (${decision.decision}): ${error.message}`
       );
       logger.error(error.stack);
+      return null;
     }
   }
 
@@ -256,15 +260,28 @@ export class MongoService {
     balances: { sol: number; usdt: number };
     prediction: any;
     botStatus: string;
+    hourDecisionId?: string; // Reference to hour_decision document (required)
+    hourDecision?: {
+      decision: string;
+      skipReasons?: any[];
+      tradeDetails?: any;
+    }; // Embedded decision summary (required)
   }): Promise<void> {
     if (!this.db || !this.isConnected) return;
 
     try {
+      // Ensure hour_decision is always provided
+      if (!data.hourDecisionId || !data.hourDecision) {
+        logger.warn(
+          "⚠️  Warning: bot_snapshot saved without hour_decision reference. This should not happen."
+        );
+      }
+
       const snapshots = this.db.collection("bot_snapshots");
       const totalValue =
         data.balances.sol * data.marketData.price + data.balances.usdt;
 
-      await snapshots.insertOne({
+      const snapshotData: any = {
         timestamp: new Date(),
         marketData: data.marketData,
         balances: {
@@ -274,7 +291,20 @@ export class MongoService {
         prediction: data.prediction,
         botStatus: data.botStatus,
         createdAt: new Date(),
-      });
+      };
+
+      // Always add hour_decision reference and embedded data
+      if (data.hourDecisionId) {
+        snapshotData.hourDecisionId = data.hourDecisionId;
+      }
+      if (data.hourDecision) {
+        snapshotData.hourDecision = data.hourDecision;
+      }
+
+      await snapshots.insertOne(snapshotData);
+      logger.debug(
+        `💾 Bot snapshot saved with decision: ${data.hourDecision?.decision || "N/A"}`
+      );
     } catch (error: any) {
       logger.error("Error saving bot snapshot:", error.message);
     }
@@ -421,8 +451,14 @@ export class MongoService {
 
       const [total, traded, skipped] = await Promise.all([
         decisionsCollection.countDocuments(matchFilter),
-        decisionsCollection.countDocuments({ ...matchFilter, decision: "TRADED" }),
-        decisionsCollection.countDocuments({ ...matchFilter, decision: "SKIPPED" }),
+        decisionsCollection.countDocuments({
+          ...matchFilter,
+          decision: "TRADED",
+        }),
+        decisionsCollection.countDocuments({
+          ...matchFilter,
+          decision: "SKIPPED",
+        }),
       ]);
 
       const tradedPercent = total > 0 ? (traded / total) * 100 : 0;
@@ -525,10 +561,14 @@ export class MongoService {
 
       return decisions.map((d: any) => ({
         ...d,
-        timestamp: d.timestamp instanceof Date ? d.timestamp : new Date(d.timestamp),
+        timestamp:
+          d.timestamp instanceof Date ? d.timestamp : new Date(d.timestamp),
         skipReasons: d.skipReasons?.map((sr: any) => ({
           ...sr,
-          timestamp: sr.timestamp instanceof Date ? sr.timestamp : new Date(sr.timestamp),
+          timestamp:
+            sr.timestamp instanceof Date
+              ? sr.timestamp
+              : new Date(sr.timestamp),
         })),
       })) as HourDecision[];
     } catch (error: any) {

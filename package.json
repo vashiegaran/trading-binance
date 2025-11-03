@@ -9,7 +9,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "start:prod": "node dist/index.js",
-    "verify-skipped": "tsx scripts/verifySkippedTrades.ts"
+    "verify-skipped": "tsx scripts/verifySkippedTrades.ts",
+    "clear-db": "tsx scripts/clearDatabase.ts"
   },
   "keywords": [
     "binance",

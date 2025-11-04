@@ -309,5 +309,45 @@ export class ProfitTracker {
       logger.error('Error saving trades:', error.message);
     }
   }
+
+  /**
+   * Get all trades (for risk management calculations)
+   */
+  getTrades(): TradeRecord[] {
+    return [...this.trades];
+  }
+
+  /**
+   * Calculate average entry price for unmatched SOL holdings
+   */
+  getAverageEntryPrice(): number {
+    const buyTrades = this.trades.filter((t) => t.type === 'BUY');
+    const sellTrades = this.trades.filter((t) => t.type === 'SELL');
+
+    // Calculate unmatched buys (FIFO matching)
+    const unmatchedBuys: TradeRecord[] = [];
+    const sells = [...sellTrades];
+    for (const buy of buyTrades) {
+      if (sells.length > 0) {
+        sells.shift(); // Match first sell with first buy
+      } else {
+        unmatchedBuys.push(buy);
+      }
+    }
+
+    if (unmatchedBuys.length === 0) {
+      return 0;
+    }
+
+    // Calculate weighted average entry price
+    let totalCost = 0;
+    let totalQuantity = 0;
+    for (const buy of unmatchedBuys) {
+      totalCost += buy.amount;
+      totalQuantity += buy.quantity;
+    }
+
+    return totalQuantity > 0 ? totalCost / totalQuantity : 0;
+  }
 }
 

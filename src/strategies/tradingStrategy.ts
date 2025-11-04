@@ -21,9 +21,18 @@ export class TradingStrategy {
     process.env.MIN_CONFIDENCE || "50",
     10
   );
-  private readonly TRADE_AMOUNT_USDT = parseFloat(
-    process.env.TRADE_AMOUNT_USDT || "100"
-  );
+  private readonly MAX_POSITION_VALUE_USDT = parseFloat(
+    process.env.MAX_POSITION_VALUE_USDT || "10"
+  ); // Maximum total value in SOL position
+  private readonly STOP_LOSS_PERCENT = parseFloat(
+    process.env.STOP_LOSS_PERCENT || "5"
+  ); // Stop loss: sell if position is down X% from entry
+  private readonly MAX_DRAWDOWN_PERCENT = parseFloat(
+    process.env.MAX_DRAWDOWN_PERCENT || "10"
+  ); // Maximum drawdown: pause trading if portfolio is down X% from startup
+  private readonly TAKE_PROFIT_PERCENT = parseFloat(
+    process.env.TAKE_PROFIT_PERCENT || "15"
+  ); // Take profit: sell if position is up X% from entry
 
   constructor(binanceService: BinanceService) {
     this.binanceService = binanceService;
@@ -54,6 +63,138 @@ export class TradingStrategy {
         this.QUOTE_ASSET
       } | Total: $${totalValue.toFixed(2)}`
     );
+
+    // ============================================
+    // RISK MANAGEMENT CHECKS (Priority 1)
+    // ============================================
+
+    // 1. Check Maximum Drawdown Protection
+    const drawdownResult = await this.checkMaximumDrawdown(totalValue);
+    if (drawdownResult.shouldPause) {
+      logger.warn(
+        `🚨 MAX DRAWDOWN HIT: Portfolio down ${drawdownResult.drawdownPercent.toFixed(
+          2
+        )}% from startup. Trading paused for safety.`
+      );
+      return {
+        traded: false,
+        skipReasons: [
+          {
+            reason: "MAX_DRAWDOWN_EXCEEDED",
+            details: {
+              drawdownPercent: drawdownResult.drawdownPercent,
+              maxDrawdown: this.MAX_DRAWDOWN_PERCENT,
+              currentValue: totalValue,
+              startupValue: drawdownResult.startupValue,
+              explanation: `Portfolio down ${drawdownResult.drawdownPercent.toFixed(
+                2
+              )}% from startup, exceeding maximum drawdown of ${
+                this.MAX_DRAWDOWN_PERCENT
+              }%`,
+            },
+            timestamp: new Date(),
+          },
+        ],
+      };
+    }
+
+    // 2. Check Stop-Loss Protection (if holding SOL)
+    if (solBalance > 0.001) {
+      const stopLossResult = await this.checkStopLoss(
+        solBalance,
+        marketData.price
+      );
+      if (stopLossResult.shouldSell) {
+        logger.warn(
+          `🛑 STOP-LOSS TRIGGERED: Position down ${stopLossResult.lossPercent.toFixed(
+            2
+          )}% from average entry. Forcing sell to limit losses.`
+        );
+        // Force sell regardless of prediction
+        return await this.executeSell(
+          solBalance,
+          marketData.price,
+          usdtBalance,
+          {
+            ...prediction,
+            signal: "SELL",
+            confidence: 100, // Override confidence for stop-loss
+            reasoning: [
+              `Stop-loss triggered: ${stopLossResult.lossPercent.toFixed(
+                2
+              )}% loss from entry price $${stopLossResult.avgEntryPrice.toFixed(
+                2
+              )}`,
+            ],
+          } as Prediction,
+          marketData
+        );
+      }
+    }
+
+    // 3. Check Take-Profit Protection (if holding SOL)
+    if (solBalance > 0.001) {
+      const takeProfitResult = await this.checkTakeProfit(
+        solBalance,
+        marketData.price
+      );
+      if (takeProfitResult.shouldSell) {
+        logger.info(
+          `💰 TAKE-PROFIT TRIGGERED: Position up ${takeProfitResult.profitPercent.toFixed(
+            2
+          )}% from average entry. Taking profit.`
+        );
+        // Force sell to take profit
+        return await this.executeSell(
+          solBalance,
+          marketData.price,
+          usdtBalance,
+          {
+            ...prediction,
+            signal: "SELL",
+            confidence: 100, // Override confidence for take-profit
+            reasoning: [
+              `Take-profit triggered: ${takeProfitResult.profitPercent.toFixed(
+                2
+              )}% profit from entry price $${takeProfitResult.avgEntryPrice.toFixed(
+                2
+              )}`,
+            ],
+          } as Prediction,
+          marketData
+        );
+      }
+    }
+
+    // 4. Check Position Size Limit (before buying)
+    if (prediction.signal === "BUY") {
+      const currentPositionValue = solBalance * marketData.price;
+      if (currentPositionValue >= this.MAX_POSITION_VALUE_USDT) {
+        logger.info(
+          `⏸️  Position limit reached: ${currentPositionValue.toFixed(
+            2
+          )} USDT >= ${this.MAX_POSITION_VALUE_USDT} USDT max. Skipping buy.`
+        );
+        return {
+          traded: false,
+          skipReasons: [
+            {
+              reason: "POSITION_LIMIT_REACHED",
+              details: {
+                currentPositionValue,
+                maxPositionValue: this.MAX_POSITION_VALUE_USDT,
+                explanation: `Current position value (${currentPositionValue.toFixed(
+                  2
+                )} USDT) equals or exceeds maximum allowed (${
+                  this.MAX_POSITION_VALUE_USDT
+                } USDT)`,
+              },
+              timestamp: new Date(),
+            },
+          ],
+        };
+      }
+    }
 
     // Check if prediction confidence is high enough
     if (prediction.confidence < this.MIN_CONFIDENCE) {
@@ -136,8 +277,44 @@ export class TradingStrategy {
   ): Promise<StrategyExecutionResult> {
     const skipReasons: SkipReason[] = [];
 
-    // Check if we have enough USDT
-    const tradeAmount = Math.min(this.TRADE_AMOUNT_USDT, usdtBalance * 0.95); // Use 95% to account for fees
+    // Check position size limit - ensure we don't exceed MAX_POSITION_VALUE_USDT
+    const currentPositionValue = solBalanceBefore * currentPrice;
+    const remainingPositionCapacity = Math.max(
+      0,
+      this.MAX_POSITION_VALUE_USDT - currentPositionValue
+    );
+
+    // Calculate trade amount - don't exceed remaining capacity
+    const maxTradeAmount = Math.min(
+      remainingPositionCapacity,
+      usdtBalance * 0.95
+    ); // Use 95% to account for fees
+
+    if (remainingPositionCapacity <= 0) {
+      const reason: SkipReason = {
+        reason: "POSITION_LIMIT_REACHED",
+        details: {
+          currentPositionValue,
+          maxPositionValue: this.MAX_POSITION_VALUE_USDT,
+          explanation: `Current position value (${currentPositionValue.toFixed(
+            2
+          )} USDT) equals or exceeds maximum allowed (${
+            this.MAX_POSITION_VALUE_USDT
+          } USDT)`,
+        },
+        timestamp: new Date(),
+      };
+      skipReasons.push(reason);
+      logger.warn(
+        `⚠️  Position limit reached (${currentPositionValue.toFixed(2)} >= ${
+          this.MAX_POSITION_VALUE_USDT
+        }), cannot buy more`
+      );
+      return { traded: false, skipReasons };
+    }
+
+    // Check if we have enough USDT for minimum trade
+    const tradeAmount = Math.min(maxTradeAmount, remainingPositionCapacity);
 
     if (tradeAmount < 10) {
       const reason: SkipReason = {
@@ -146,13 +323,18 @@ export class TradingStrategy {
           availableBalance: usdtBalance,
           requiredAmount: tradeAmount,
           minTradeAmount: 10,
-          explanation: "Not enough USDT balance for buy order",
+          remainingCapacity: remainingPositionCapacity,
+          explanation: `Not enough USDT balance or remaining position capacity (${remainingPositionCapacity.toFixed(
+            2
+          )} USDT) for buy order. Minimum: $10`,
         },
         timestamp: new Date(),
       };
       skipReasons.push(reason);
       logger.warn(
-        `⚠️  Insufficient USDT balance (${usdtBalance.toFixed(2)}), cannot buy`
+        `⚠️  Insufficient capacity (${tradeAmount.toFixed(
+          2
+        )} USDT available, need $10 minimum), cannot buy`
       );
       return { traded: false, skipReasons };
     }
@@ -387,5 +569,86 @@ export class TradingStrategy {
       logger.error(`❌ Sell execution failed:`, error.message);
       return { traded: false, skipReasons };
     }
+  }
+
+  /**
+   * Check maximum drawdown protection
+   */
+  private async checkMaximumDrawdown(currentTotalValue: number): Promise<{
+    shouldPause: boolean;
+    drawdownPercent: number;
+    startupValue: number;
+  }> {
+    // Get startup balance from MongoDB
+    const { MongoService } = await import("../services/mongodbService.js");
+    const mongoService = new MongoService();
+    await mongoService.connect();
+
+    const startupBalance = await mongoService.getStartupBalance();
+    if (!startupBalance) {
+      // No startup balance recorded yet, can't calculate drawdown
+      return { shouldPause: false, drawdownPercent: 0, startupValue: 0 };
+    }
+
+    const startupValue = startupBalance.balances.totalValue;
+    const drawdown = startupValue - currentTotalValue;
+    const drawdownPercent = (drawdown / startupValue) * 100;
+
+    const shouldPause = drawdownPercent >= this.MAX_DRAWDOWN_PERCENT;
+
+    return { shouldPause, drawdownPercent, startupValue };
+  }
+
+  /**
+   * Check stop-loss protection for current SOL position
+   */
+  private async checkStopLoss(
+    solBalance: number,
+    currentPrice: number
+  ): Promise<{
+    shouldSell: boolean;
+    lossPercent: number;
+    avgEntryPrice: number;
+  }> {
+    const avgEntryPrice = this.profitTracker.getAverageEntryPrice();
+
+    if (avgEntryPrice === 0) {
+      // No entry price available (no unmatched buys)
+      return { shouldSell: false, lossPercent: 0, avgEntryPrice: 0 };
+    }
+
+    // Calculate current loss percentage
+    const lossPercent = ((currentPrice - avgEntryPrice) / avgEntryPrice) * 100;
+
+    const shouldSell = lossPercent <= -this.STOP_LOSS_PERCENT;
+
+    return { shouldSell, lossPercent, avgEntryPrice };
+  }
+
+  /**
+   * Check take-profit protection for current SOL position
+   */
+  private async checkTakeProfit(
+    solBalance: number,
+    currentPrice: number
+  ): Promise<{
+    shouldSell: boolean;
+    profitPercent: number;
+    avgEntryPrice: number;
+  }> {
+    const avgEntryPrice = this.profitTracker.getAverageEntryPrice();
+
+    if (avgEntryPrice === 0) {
+      // No entry price available (no unmatched buys)
+      return { shouldSell: false, profitPercent: 0, avgEntryPrice: 0 };
+    }
+
+    // Calculate current profit percentage
+    const profitPercent =
+      ((currentPrice - avgEntryPrice) / avgEntryPrice) * 100;
+
+    const shouldSell = profitPercent >= this.TAKE_PROFIT_PERCENT;
+
+    return { shouldSell, profitPercent, avgEntryPrice };
   }
 }

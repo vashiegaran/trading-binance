@@ -62,20 +62,20 @@ async function logAndRecordStartupBalance() {
 // Initialize the trading bot
 const tradingBot = new TradingBot();
 
-// Schedule cron job to run every hour at minute 0
+// Schedule cron job to run every 15 minutes
 // Cron format: minute hour day month weekday
-// '0 * * * *' means: at minute 0 of every hour
-const cronSchedule = "0 * * * *";
+// '*/15 * * * *' means: every 15 minutes
+const cronSchedule = "*/15 * * * *";
 
 logger.info("🚀 Binance Solana Trading Bot Starting...");
-logger.info(`⏰ Scheduled to run every hour (cron: ${cronSchedule})`);
+logger.info(`⏰ Scheduled to run every 15 minutes (cron: ${cronSchedule})`);
 
 // Log and record total portfolio balance on startup
 logAndRecordStartupBalance().catch((error) => {
   logger.warn(`⚠️  Failed to log/record startup balance: ${error.message}`);
 });
 
-// Run immediately on startup for testing, then schedule hourly
+// Run immediately on startup for testing, then schedule every 15 minutes
 logger.info("Running initial check...");
 tradingBot.execute().catch((error) => {
   const errorMessage = error instanceof Error ? error.message : String(error);
@@ -86,9 +86,9 @@ tradingBot.execute().catch((error) => {
   }
 });
 
-// Schedule the bot to run every hour
+// Schedule the bot to run every 15 minutes
 cron.schedule(cronSchedule, async () => {
-  logger.info("⏰ Hourly cron job triggered");
+  logger.info("⏰ 15-minute cron job triggered");
   try {
     await tradingBot.execute();
   } catch (error) {

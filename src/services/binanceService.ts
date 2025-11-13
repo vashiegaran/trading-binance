@@ -52,8 +52,10 @@ export class BinanceService {
       const currentPrice = parseFloat(priceData?.price || "0");
 
       // Get historical kline data (candlestick data) for analysis
-      const klinesResponse = await this.client.klines(symbol, "1h", {
-        limit: 100,
+      // Using 15m candles for faster reaction to market changes
+      // 200 candles = ~50 hours of historical data (2+ days)
+      const klinesResponse = await this.client.klines(symbol, "15m", {
+        limit: 200,
       });
       const klines = Array.isArray(klinesResponse.data)
         ? klinesResponse.data

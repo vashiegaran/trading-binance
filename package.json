@@ -1,7 +1,7 @@
 {
   "name": "trading-binance",
   "version": "1.0.0",
-  "description": "Binance Trading Bot for Solana - Hourly Monitoring & Trading",
+  "description": "Binance Trading Bot for Solana - 15-Minute Monitoring & Trading",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {

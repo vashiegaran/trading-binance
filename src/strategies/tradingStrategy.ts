@@ -22,8 +22,8 @@ export class TradingStrategy {
     10
   );
   private readonly MAX_POSITION_VALUE_USDT = parseFloat(
-    process.env.MAX_POSITION_VALUE_USDT || "10"
-  ); // Maximum total value in SOL position
+    process.env.MAX_POSITION_VALUE_USDT || "22"
+  ); // Maximum total value in SOL position (set to $22 to handle $20 position + price fluctuations)
   private readonly STOP_LOSS_PERCENT = parseFloat(
     process.env.STOP_LOSS_PERCENT || "5"
   ); // Stop loss: sell if position is down X% from entry
@@ -31,8 +31,11 @@ export class TradingStrategy {
     process.env.MAX_DRAWDOWN_PERCENT || "10"
   ); // Maximum drawdown: pause trading if portfolio is down X% from startup
   private readonly TAKE_PROFIT_PERCENT = parseFloat(
-    process.env.TAKE_PROFIT_PERCENT || "15"
+    process.env.TAKE_PROFIT_PERCENT || "20"
   ); // Take profit: sell if position is up X% from entry
+  private readonly EMERGENCY_STOP_LOSS_PERCENT = parseFloat(
+    process.env.EMERGENCY_STOP_LOSS_PERCENT || "15"
+  ); // Emergency stop-loss: sell all if portfolio is down X% from startup (works even without trades)
 
   constructor(binanceService: BinanceService) {
     this.binanceService = binanceService;
@@ -67,6 +70,47 @@ export class TradingStrategy {
     // ============================================
     // RISK MANAGEMENT CHECKS (Priority 1)
     // ============================================
+
+    // 0. Check Emergency Stop-Loss (Highest Priority - Uses Startup Balance)
+    // This works even when there are no trades, uses startup balance as reference
+    if (solBalance > 0.001) {
+      const emergencyStopResult = await this.checkEmergencyStopLoss(
+        totalValue,
+        solBalance,
+        marketData.price,
+        usdtBalance
+      );
+      if (emergencyStopResult.shouldSell) {
+        logger.error(
+          `🚨 EMERGENCY STOP-LOSS TRIGGERED: Portfolio down ${emergencyStopResult.drawdownPercent.toFixed(
+            2
+          )}% from startup (${emergencyStopResult.startupValue.toFixed(
+            2
+          )} → ${totalValue.toFixed(
+            2
+          )}). Selling all SOL to prevent further losses.`
+        );
+        // Force sell all SOL immediately - emergency stop
+        return await this.executeSell(
+          solBalance,
+          marketData.price,
+          usdtBalance,
+          {
+            ...prediction,
+            signal: "SELL",
+            confidence: 100, // Override confidence for emergency stop
+            reasoning: [
+              `Emergency stop-loss triggered: Portfolio down ${emergencyStopResult.drawdownPercent.toFixed(
+                2
+              )}% from startup balance of $${emergencyStopResult.startupValue.toFixed(
+                2
+              )}. Selling all holdings to prevent further losses.`,
+            ],
+          } as Prediction,
+          marketData
+        );
+      }
+    }
 
     // 1. Check Maximum Drawdown Protection
     const drawdownResult = await this.checkMaximumDrawdown(totalValue);
@@ -315,18 +359,19 @@ export class TradingStrategy {
 
     // Check if we have enough USDT for minimum trade
     const tradeAmount = Math.min(maxTradeAmount, remainingPositionCapacity);
+    const MIN_TRADE_AMOUNT_USDT = 5; // Lowered from $10 to $5 for better utilization of $20 wallet
 
-    if (tradeAmount < 10) {
+    if (tradeAmount < MIN_TRADE_AMOUNT_USDT) {
       const reason: SkipReason = {
         reason: "INSUFFICIENT_BALANCE_BUY",
         details: {
           availableBalance: usdtBalance,
           requiredAmount: tradeAmount,
-          minTradeAmount: 10,
+          minTradeAmount: MIN_TRADE_AMOUNT_USDT,
           remainingCapacity: remainingPositionCapacity,
           explanation: `Not enough USDT balance or remaining position capacity (${remainingPositionCapacity.toFixed(
             2
-          )} USDT) for buy order. Minimum: $10`,
+          )} USDT) for buy order. Minimum: $${MIN_TRADE_AMOUNT_USDT}`,
         },
         timestamp: new Date(),
       };
@@ -334,7 +379,7 @@ export class TradingStrategy {
       logger.warn(
         `⚠️  Insufficient capacity (${tradeAmount.toFixed(
           2
-        )} USDT available, need $10 minimum), cannot buy`
+        )} USDT available, need $${MIN_TRADE_AMOUNT_USDT} minimum), cannot buy`
       );
       return { traded: false, skipReasons };
     }
@@ -457,7 +502,9 @@ export class TradingStrategy {
 
     // Check if we have enough SOL to sell
     const minTradeAmount = 0.01; // Minimum SOL trade amount
-    const tradeQuantity = Math.min(solBalance * 0.95, solBalance); // Use 95% to account for fees
+    // Sell 100% of position to avoid dust and tracking issues
+    // Binance will automatically deduct fees, so we don't need to reserve 5%
+    const tradeQuantity = solBalance;
 
     if (tradeQuantity < minTradeAmount) {
       const reason: SkipReason = {
@@ -569,6 +616,41 @@ export class TradingStrategy {
       logger.error(`❌ Sell execution failed:`, error.message);
       return { traded: false, skipReasons };
     }
+  }
+
+  /**
+   * Check emergency stop-loss using startup balance (works even without trades)
+   */
+  private async checkEmergencyStopLoss(
+    currentTotalValue: number,
+    solBalance: number,
+    currentPrice: number,
+    usdtBalance: number
+  ): Promise<{
+    shouldSell: boolean;
+    drawdownPercent: number;
+    startupValue: number;
+  }> {
+    // Get startup balance from MongoDB
+    const { MongoService } = await import("../services/mongodbService.js");
+    const mongoService = new MongoService();
+    await mongoService.connect();
+
+    const startupBalance = await mongoService.getStartupBalance();
+    if (!startupBalance) {
+      // No startup balance recorded yet, can't calculate drawdown
+      return { shouldSell: false, drawdownPercent: 0, startupValue: 0 };
+    }
+
+    const startupValue = startupBalance.balances.totalValue;
+    const drawdown = startupValue - currentTotalValue;
+    const drawdownPercent = (drawdown / startupValue) * 100;
+
+    // Emergency stop: if portfolio is down by EMERGENCY_STOP_LOSS_PERCENT, sell everything
+    const shouldSell =
+      drawdownPercent >= this.EMERGENCY_STOP_LOSS_PERCENT && solBalance > 0.001;
+
+    return { shouldSell, drawdownPercent, startupValue };
   }
 
   /**

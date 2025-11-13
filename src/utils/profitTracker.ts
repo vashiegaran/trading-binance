@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { logger } from './logger.js';
 import { MongoService } from '../services/mongodbService.js';
@@ -34,10 +35,37 @@ export class ProfitTracker {
   private trades: TradeRecord[] = [];
   private initialBalance: { sol: number; usdt: number } | null = null;
   private mongoService: MongoService;
+  private tradesLoaded: boolean = false;
 
   constructor() {
     this.mongoService = new MongoService();
-    this.loadTrades();
+    // Note: loadTrades is async but constructor can't be async
+    // We'll load trades synchronously from file system if possible, or ensure it's awaited before use
+    this.loadTradesSync();
+  }
+
+  /**
+   * Load trades synchronously (for immediate use in constructor)
+   * This ensures trades are available immediately, though async loading is preferred
+   */
+  private loadTradesSync(): void {
+    try {
+      // Use synchronous file read for immediate availability
+      const data = fsSync.readFileSync(this.TRACKING_FILE, 'utf-8');
+      this.trades = JSON.parse(data);
+      this.tradesLoaded = true;
+      logger.info(`📁 Loaded ${this.trades.length} previous trades (sync)`);
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        // File doesn't exist yet, start fresh
+        this.trades = [];
+        this.tradesLoaded = true;
+      } else {
+        logger.warn('Error loading trades synchronously, will retry async:', error.message);
+        // Fallback to async loading
+        this.loadTrades();
+      }
+    }
   }
 
   /**
@@ -170,6 +198,11 @@ export class ProfitTracker {
    * Get profit summary
    */
   getSummary(currentBalance: { sol: number; usdt: number }, currentPrice: number): ProfitSummary {
+    // Ensure trades are loaded (safety check)
+    if (!this.tradesLoaded && this.trades.length === 0) {
+      this.loadTradesSync();
+    }
+    
     const buyTrades = this.trades.filter((t) => t.type === 'BUY');
     const sellTrades = this.trades.filter((t) => t.type === 'SELL');
 
@@ -271,20 +304,31 @@ export class ProfitTracker {
   }
 
   /**
-   * Load trades from file
+   * Load trades from file (async version - called as fallback or for refresh)
    */
   private async loadTrades(): Promise<void> {
     try {
       const data = await fs.readFile(this.TRACKING_FILE, 'utf-8');
       this.trades = JSON.parse(data);
-      logger.info(`📁 Loaded ${this.trades.length} previous trades`);
+      this.tradesLoaded = true;
+      logger.info(`📁 Loaded ${this.trades.length} previous trades (async)`);
     } catch (error: any) {
       if (error.code === 'ENOENT') {
         // File doesn't exist yet, start fresh
         this.trades = [];
+        this.tradesLoaded = true;
       } else {
         logger.error('Error loading trades:', error.message);
       }
+    }
+  }
+
+  /**
+   * Ensure trades are loaded before use (for async safety)
+   */
+  private async ensureTradesLoaded(): Promise<void> {
+    if (!this.tradesLoaded) {
+      await this.loadTrades();
     }
   }
 
@@ -314,6 +358,10 @@ export class ProfitTracker {
    * Get all trades (for risk management calculations)
    */
   getTrades(): TradeRecord[] {
+    // Ensure trades are loaded (safety check)
+    if (!this.tradesLoaded && this.trades.length === 0) {
+      this.loadTradesSync();
+    }
     return [...this.trades];
   }
 
@@ -321,6 +369,11 @@ export class ProfitTracker {
    * Calculate average entry price for unmatched SOL holdings
    */
   getAverageEntryPrice(): number {
+    // Ensure trades are loaded (safety check)
+    if (!this.tradesLoaded && this.trades.length === 0) {
+      this.loadTradesSync();
+    }
+    
     const buyTrades = this.trades.filter((t) => t.type === 'BUY');
     const sellTrades = this.trades.filter((t) => t.type === 'SELL');
 

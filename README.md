@@ -1,10 +1,10 @@
 # Binance Solana Trading Bot
 
-Automated trading bot for Solana (SOL) on Binance that runs hourly analysis and executes trades based on predictive algorithms.
+Automated trading bot for Solana (SOL) on Binance that runs analysis every 15 minutes and executes trades based on predictive algorithms.
 
 ## Features
 
-- 🤖 **Automated Trading**: Runs every hour using cron scheduling
+- 🤖 **Automated Trading**: Runs every 15 minutes using cron scheduling for faster reaction to market changes
 - 📊 **Market Analysis**: Real-time data fetching from Binance API
 - 🔮 **Prediction Algorithm**: Multiple technical indicators (RSI, Moving Averages, Momentum, Volume)
 - 💼 **Smart Trading Strategy**: Buy/Sell decisions based on algorithm predictions
@@ -116,8 +116,8 @@ For complete deployment guide, see **`FLYIO_DEPLOYMENT.md`**
 
 ## How It Works
 
-1. **Hourly Execution**: Bot runs every hour at minute 0
-2. **Data Collection**: Fetches current SOL/USDT market data and historical candles
+1. **15-Minute Execution**: Bot runs every 15 minutes for faster reaction to market changes
+2. **Data Collection**: Fetches current SOL/USDT market data and historical 15-minute candles (200 candles = ~50 hours of data)
 3. **Analysis**: Runs prediction algorithm using:
    - RSI (Relative Strength Index)
    - Moving Averages

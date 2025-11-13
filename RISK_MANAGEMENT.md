@@ -6,6 +6,29 @@ The bot now includes comprehensive risk management features to protect your capi
 
 ## Implemented Features
 
+### 0. **Emergency Stop-Loss Protection** 🚨 (HIGHEST PRIORITY)
+
+- **What it does**: Automatically sells ALL SOL holdings if total portfolio is down by a configured percentage from startup balance
+- **Default**: 15% loss triggers emergency sell
+- **Configuration**: `EMERGENCY_STOP_LOSS_PERCENT=15` in `.env`
+- **How it works**:
+  - Compares current total portfolio value vs startup balance (from MongoDB)
+  - **Works even when there are 0 trades** - uses startup balance as reference
+  - If portfolio down ≥ 15%, **immediately sells ALL SOL** regardless of prediction
+  - Overrides confidence to 100% for emergency execution
+  - **This is the highest priority check** - runs before all other risk management
+
+**Example:**
+
+```
+Startup Portfolio: $22.23
+Current Portfolio: $19.69 (down 11.43%)
+→ No action yet (below 15% threshold)
+
+If drops to $18.90 (down 15%):
+→ Emergency stop-loss triggered → SELL ALL SOL immediately
+```
+
 ### 1. **Automatic Stop-Loss Protection** 🛑
 
 - **What it does**: Automatically sells your SOL position if it's down by a configured percentage from your average entry price
@@ -84,23 +107,29 @@ MAX_POSITION_VALUE_USDT: $10
 
 Risk management checks run **BEFORE** normal trading logic:
 
-1. **Maximum Drawdown Check** (highest priority)
+1. **Emergency Stop-Loss Check** (HIGHEST PRIORITY)
 
-   - If exceeded → Trading paused, no further checks
+   - If portfolio down ≥ 15% from startup → **SELL ALL SOL immediately**
+   - Works even with 0 trades (uses startup balance)
+   - No further checks after this
 
-2. **Stop-Loss Check** (if holding SOL)
+2. **Maximum Drawdown Check**
+
+   - If portfolio down ≥ 10% from startup → Trading paused, no further checks
+
+3. **Stop-Loss Check** (if holding SOL, requires trades)
 
    - If triggered → Immediate SELL, no further checks
 
-3. **Take-Profit Check** (if holding SOL)
+4. **Take-Profit Check** (if holding SOL)
 
    - If triggered → Immediate SELL, no further checks
 
-4. **Position Size Limit Check** (before BUY)
+5. **Position Size Limit Check** (before BUY)
 
    - If exceeded → Buy skipped
 
-5. **Normal Trading Logic**
+6. **Normal Trading Logic**
    - Confidence checks
    - Prediction signal execution
    - Regular BUY/SELL/HOLD
@@ -112,26 +141,30 @@ Add these to your `.env` file:
 ```env
 # Risk Management
 MAX_POSITION_VALUE_USDT=10        # Maximum total value in SOL position
-STOP_LOSS_PERCENT=5               # Stop loss: sell if down X% from entry
+STOP_LOSS_PERCENT=5               # Stop loss: sell if down X% from entry (requires trades)
 MAX_DRAWDOWN_PERCENT=10           # Maximum drawdown: pause if portfolio down X%
-TAKE_PROFIT_PERCENT=15            # Take profit: sell if up X% from entry
+TAKE_PROFIT_PERCENT=20            # Take profit: sell if up X% from entry
+EMERGENCY_STOP_LOSS_PERCENT=15    # Emergency stop-loss: sell ALL if portfolio down X% from startup (works even without trades)
 ```
 
-## How It Handles Your -9% Loss
+## How It Handles Your -11% Loss
 
 With these features, here's what happens:
 
-### Scenario 1: Loss is from holding SOL (unrealized)
+### Scenario 1: Loss is from holding SOL (unrealized, 0 trades)
 
-- **Stop-Loss Check**: If your average entry price results in a loss ≥ 5%, it will sell automatically
-- **Maximum Drawdown**: If total portfolio is down ≥ 10% from startup, trading pauses
-- **Next Hour**: Bot checks all risk management rules and acts accordingly
+- **Emergency Stop-Loss**: If portfolio down ≥ 15% from startup → **SELL ALL SOL immediately**
+- **Maximum Drawdown**: If portfolio down ≥ 10% from startup → Trading paused
+- **Your Current Situation**: -11.43% loss
+  - Below 15% emergency threshold → No emergency sell yet
+  - Above 10% maximum drawdown → Trading will be paused
+  - **Next Hour**: Bot will pause trading (won't buy/sell based on predictions)
 
-### Scenario 2: Loss is from trading (realized)
+### Scenario 2: Loss is from trading (realized, has trades)
 
-- The bot will check stop-loss on every cycle
-- If you're down ≥ 5% from entry, it will sell immediately
-- Maximum drawdown will pause trading if total portfolio down ≥ 10%
+- **Emergency Stop-Loss**: If portfolio down ≥ 15% from startup → **SELL ALL SOL immediately**
+- **Stop-Loss**: If position down ≥ 5% from entry price → Sell automatically
+- **Maximum Drawdown**: If portfolio down ≥ 10% from startup → Trading paused
 
 ## Benefits
 
@@ -149,10 +182,17 @@ With these features, here's what happens:
 
 ## Recommendations
 
-For your current -9% situation:
+For your current -11.43% situation:
 
-- **Stop-Loss**: Set to 5% (default) - will sell if position drops further
-- **Maximum Drawdown**: Set to 10% (default) - will pause at -10% total
-- **Take-Profit**: Set to 15% (default) - will lock profits on recovery
+- **Emergency Stop-Loss**: Set to 15% (default) - **will sell ALL SOL if drops to -15%**
+- **Maximum Drawdown**: Set to 10% (default) - **currently triggered, trading paused**
+- **Stop-Loss**: Set to 5% (default) - requires trades to work (you have 0 trades)
+- **Take-Profit**: Set to 20% (default) - will lock profits on recovery
+
+**Current Status**:
+
+- Your portfolio is down 11.43% from startup
+- Maximum drawdown (10%) is triggered → Trading is paused
+- If portfolio drops to -15%, emergency stop-loss will sell all SOL immediately
 
 The bot will now automatically protect you from further losses!

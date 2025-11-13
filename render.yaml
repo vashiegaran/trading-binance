@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: trading-bot
+    runtime: node
+    plan: free  # Change to 'starter' ($7/mo) for 24/7 uptime without sleep
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      # ⚠️ SECURITY: Add sensitive credentials via Render Dashboard (Environment tab)
+      # Do NOT commit secrets to git! Add these in Render Dashboard:
+      # - BINANCE_API_KEY
+      # - BINANCE_API_SECRET  
+      # - MONGODB_URI
+      
+      # MongoDB Configuration
+      - key: MONGODB_DB_NAME
+        value: Trading
+      
+      # Trading Configuration
+      - key: TRADING_PAIR
+        value: SOLUSDT
+      - key: TRADE_AMOUNT_USDT
+        value: "22"
+      - key: MIN_CONFIDENCE
+        value: "60"
+      - key: USE_MARKET_ORDERS
+        value: "true"
+      
+      # Risk Management (Optimized for $20 SOL position)
+      - key: MAX_POSITION_VALUE_USDT
+        value: "22"
+      - key: STOP_LOSS_PERCENT
+        value: "5"
+      - key: MAX_DRAWDOWN_PERCENT
+        value: "10"
+      - key: TAKE_PROFIT_PERCENT
+        value: "20"
+      - key: EMERGENCY_STOP_LOSS_PERCENT
+        value: "15"
+      - key: MIN_TRADE_AMOUNT_USDT
+        value: "5"
+      
+      # Application Configuration
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8080"
+      - key: LOG_LEVEL
+        value: info
+      - key: PAPER_TRADING
+        value: "false"
+
